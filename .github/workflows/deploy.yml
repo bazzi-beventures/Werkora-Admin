@@ -1,0 +1,72 @@
+# Deploy der Werkora-Admin-Seite nach GitHub Pages (admin.werkora.ch).
+#
+# Quelle dieser Datei: werkora-backend/docs/deploy/werkora-admin-deploy.yml
+# Spec:                werkora-backend/docs/specs/admin-werkora-ch.md §7.1
+#
+# Der Inhalt dieses Repos wird von `sync-bau-app.yml` aus werkora-backend/bau-app
+# gespiegelt. Der Sync schliesst `.github/` ausdruecklich AUS — jedes Zielrepo
+# haelt sein eigenes `deploy.yml` mit seiner eigenen Domain und seinem eigenen
+# `VITE_API_URL`. Aenderungen hier werden vom Sync also NICHT ueberschrieben,
+# aber auch nicht aus dem Quellrepo nachgezogen: wer die Vorlage dort anpasst,
+# muss sie hier von Hand nachziehen.
+#
+# Der Unterschied zum `deploy.yml` von `Werkora-App` sind drei Zeilen:
+#   VITE_APP_TARGET: admin   →  baut admin.html statt index.html
+#   publish_dir: ./dist-admin →  nicht ./dist
+#   cname: admin.werkora.ch
+#
+# ACHTUNG (Risikozeile §12): `VITE_APP_TARGET` zu vergessen heisst, dass unter
+# admin.werkora.ch die MANDANTEN-App landet — und zwar ohne dass irgendetwas rot
+# wird. Deshalb die Probe nach dem Build; sie kostet zwei Sekunden.
+
+name: Deploy Werkora Admin
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Admin-Seite
+        env:
+          # Eigener API-Hostname (Entscheid E5): der Session-Cookie ist host-only.
+          # Über DENSELBEN API-Host würde die Anmeldung auf der Admin-Seite die
+          # Anmeldung in der Mandanten-App im selben Browser überschreiben — und
+          # umgekehrt. Als Secret im Repo: https://api-admin.werkora.ch
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_APP_TARGET: admin
+        run: npx vite build --base=/
+
+      - name: Admin-Build zeigt auf die Admin-Seite
+        run: |
+          grep -q '<title>Werkora Admin</title>' dist-admin/index.html
+          grep -q 'admin-manifest.json' dist-admin/index.html
+          test ! -e dist-admin/admin.html   # muss zu index.html umbenannt sein
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist-admin
+          # Die CNAME-Datei deterministisch schreiben lassen — sonst geht die
+          # Custom-Domain bei jedem Deploy verloren.
+          cname: admin.werkora.ch
+          # Jekyll überspringen: das ist eine Vite-SPA, kein Jekyll-Projekt.
+          enable_jekyll: false
